@@ -4,7 +4,7 @@ Copyright (c) Facebook, Inc. and its affiliates.
 This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 """
-
+import math
 import numpy as np
 import sympy as sym
 from scipy import special as sp
@@ -107,8 +107,8 @@ def sph_harm_prefactor(l_degree, m_order):
     return (
         (2 * l_degree + 1)
         / (4 * np.pi)
-        * np.math.factorial(l_degree - abs(m_order))
-        / np.math.factorial(l_degree + abs(m_order))
+        * math.factorial(l_degree - abs(m_order))
+        / math.factorial(l_degree + abs(m_order))
     ) ** 0.5
 
 
@@ -186,8 +186,8 @@ def associated_legendre_polynomials(
                     ):  # P_1(-1), P_2(-1) P_2(-2)
                         P_l_m[l_degree][-m_order] = sym.simplify(
                             (-1) ** m_order
-                            * np.math.factorial(l_degree - m_order)
-                            / np.math.factorial(l_degree + m_order)
+                            * math.factorial(l_degree - m_order)
+                            / math.factorial(l_degree + m_order)
                             * P_l_m[l_degree][m_order]
                         )
 

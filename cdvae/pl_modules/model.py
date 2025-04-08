@@ -72,10 +72,13 @@ class CrystGNN_Supervise(BaseModule):
         return loss
 
     def validation_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
-
+        print(f"✅ validation_step called! batch_idx = {batch_idx}")
         preds = self(batch)
 
         log_dict, loss = self.compute_stats(batch, preds, prefix='val')
+        
+        log_dict['val_loss'] = loss
+        self.log("val_loss", loss, on_epoch=True, prog_bar=True)
 
         self.log_dict(
             log_dict,
@@ -84,6 +87,9 @@ class CrystGNN_Supervise(BaseModule):
             prog_bar=True,
         )
         return loss
+
+    def validation_epoch_end(self, outputs):
+        print("✅✅ validation_epoch_end called!")
 
     def test_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
 
@@ -538,6 +544,8 @@ class CDVAE(BaseModule):
     def validation_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
         outputs = self(batch, teacher_forcing=False, training=False)
         log_dict, loss = self.compute_stats(batch, outputs, prefix='val')
+        
+        self.log("val_loss", loss, on_epoch=True, prog_bar=True)
         self.log_dict(
             log_dict,
             on_step=False,

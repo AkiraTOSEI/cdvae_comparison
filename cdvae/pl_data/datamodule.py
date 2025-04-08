@@ -10,6 +10,7 @@ import torch
 from omegaconf import DictConfig
 from torch.utils.data import Dataset
 from torch_geometric.data import DataLoader
+from torch.utils.data import ConcatDataset
 
 from cdvae.common.utils import PROJECT_ROOT
 from cdvae.common.data_utils import get_scaler_from_data_list
@@ -55,7 +56,6 @@ class CrystDataModule(pl.LightningDataModule):
     def prepare_data(self) -> None:
         # download only
         pass
-
     def get_scaler(self, scaler_path):
         # Load once to compute property scaler
         if scaler_path is None:
@@ -81,6 +81,8 @@ class CrystDataModule(pl.LightningDataModule):
                 hydra.utils.instantiate(dataset_cfg)
                 for dataset_cfg in self.datasets.val
             ]
+            print("✅ self.val_datasets:", self.val_datasets)
+
 
             self.train_dataset.lattice_scaler = self.lattice_scaler
             self.train_dataset.scaler = self.scaler
@@ -107,6 +109,7 @@ class CrystDataModule(pl.LightningDataModule):
         )
 
     def val_dataloader(self) -> Sequence[DataLoader]:
+        """
         return [
             DataLoader(
                 dataset,
@@ -116,7 +119,16 @@ class CrystDataModule(pl.LightningDataModule):
                 worker_init_fn=worker_init_fn,
             )
             for dataset in self.val_datasets
-        ]
+        ]"""
+        concat_val_dataset = ConcatDataset(self.val_datasets)
+
+        return DataLoader(
+            concat_val_dataset,
+            shuffle=False,
+            batch_size=self.batch_size.val,
+            num_workers=self.num_workers.val,
+            worker_init_fn=worker_init_fn,
+        )
 
     def test_dataloader(self) -> Sequence[DataLoader]:
         return [
