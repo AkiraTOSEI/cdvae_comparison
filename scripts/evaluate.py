@@ -168,9 +168,19 @@ def optimization(model, ld_kwargs, data_loader,
         if i % interval == 0 or i == (num_gradient_steps-1):
             crystals = model.langevin_dynamics(z, ld_kwargs)
             all_crystals.append(crystals)
-    return {k: torch.cat([d[k] for d in all_crystals]).unsqueeze(0) for k in
-            ['frac_coords', 'atom_types', 'num_atoms', 'lengths', 'angles']}
+    #return {k: torch.cat([d[k] for d in all_crystals]).unsqueeze(0) for k in
+    #        ['frac_coords', 'atom_types', 'num_atoms', 'lengths', 'angles']}
+    result = {
+        k: torch.cat([d[k] for d in all_crystals]).unsqueeze(0)
+        for k in ['frac_coords', 'atom_types', 'num_atoms', 'lengths', 'angles']
+    }
 
+    # 🔽 推論結果を追加：z に対する予測値
+    with torch.no_grad():
+        preds = model.fc_property(z).detach().cpu()  # shape: (num_samples, 1)
+        result['prediction'] = preds.squeeze(1)      # shape: (num_samples,)
+
+    return result
 
 def main(args):
     # load_data if do reconstruction.
