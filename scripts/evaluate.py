@@ -154,6 +154,15 @@ def optimization(model, ld_kwargs, data_loader,
                         device=model.device)
         z.requires_grad = True
 
+    # 🔽 ここでタスクに応じて最大化／最小化を切り替え
+    data_root = model.hparams.data.root_path if hasattr(model.hparams.data, "root_path") else ""
+    maximize = "supercon" in data_root.lower()
+    sign = -1.0 if maximize else 1.0
+
+    # 🔽 ここで確認用に print
+    print(f"[CDVAE OPTIMIZATION] Detected task: {data_root}")
+    print(f"[CDVAE OPTIMIZATION] Optimization direction: {'maximize' if maximize else 'minimize'} (sign = {sign})")
+
     opt = Adam([z], lr=lr)
     model.freeze()
 
@@ -161,7 +170,7 @@ def optimization(model, ld_kwargs, data_loader,
     interval = num_gradient_steps // (num_saved_crys-1)
     for i in tqdm(range(num_gradient_steps)):
         opt.zero_grad()
-        loss = model.fc_property(z).mean()
+        loss = sign * model.fc_property(z).mean()  # 🔽 ここが切り替えポイント
         loss.backward()
         opt.step()
 
