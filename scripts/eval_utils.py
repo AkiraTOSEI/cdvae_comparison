@@ -19,6 +19,15 @@ from cdvae.pl_data.datamodule import worker_init_fn
 
 from torch_geometric.data import DataLoader
 
+import pydoc  # ファイルの先頭に入ってなければ追加
+
+def get_model_class(target_path: str):
+    import pydoc
+    model_class = pydoc.locate(target_path)
+    if model_class is None:
+        raise ImportError(f"Cannot locate model class from target: {target_path}")
+    return model_class
+
 CompScaler = StandardScaler(
     means=np.array(CompScalerMeans),
     stds=np.array(CompScalerStds),
@@ -67,7 +76,9 @@ def load_model(model_path, load_data=False, testing=True):
             ckpt_epochs = np.array(
                 [int(ckpt.parts[-1].split('-')[0].split('=')[1]) for ckpt in ckpts])
             ckpt = str(ckpts[ckpt_epochs.argsort()[-1]])
-        model = model.load_from_checkpoint(ckpt)
+        #model = model.load_from_checkpoint(ckpt)
+        model_class = get_model_class(cfg.model._target_)  # たとえば CDVAE クラスが取得される
+        model = model_class.load_from_checkpoint(ckpt)
         model.lattice_scaler = torch.load(model_path / 'lattice_scaler.pt')
         model.scaler = torch.load(model_path / 'prop_scaler.pt')
 
