@@ -161,7 +161,8 @@ def optimization(model, ld_kwargs, data_loader,
 
     # 🔽 ここで確認用に print
     print(f"[CDVAE OPTIMIZATION] Detected task: {data_root}")
-    print(f"[CDVAE OPTIMIZATION] Optimization direction: {'maximize' if maximize else 'minimize'} (sign = {sign})")
+    print(f"[CDVAE OPTIMIZATION] Optimization direction: {'maximize' if maximize else 'minimize'} (sign = {sign}) with learning rate: {lr}")
+    print(f"[CDVAE OPTIMIZATION] num_starting_points:{num_starting_points}")
 
     opt = Adam([z], lr=lr)
     model.freeze()
@@ -186,9 +187,23 @@ def optimization(model, ld_kwargs, data_loader,
 
     # 🔽 推論結果を追加：z に対する予測値
     with torch.no_grad():
-        preds = model.fc_property(z).detach().cpu()  # shape: (num_samples, 1)
-        result['prediction'] = preds.squeeze(1)      # shape: (num_samples,)
+        # 元の z に対する予測値
+        preds = model.fc_property(z).detach().cpu()
+        result['prediction'] = preds.squeeze(1)
 
+        # 🔽 crystals の中身を encode（エンコード）して、z を再構成
+        batch = model.build_batch(
+            frac_coords=result['frac_coords'][0].to(model.device),
+            atom_types=result['atom_types'][0].to(model.device),
+            lengths=result['lengths'][0].to(model.device),
+            angles=result['angles'][0].to(model.device),
+            num_atoms=result['num_atoms'][0].to(model.device),
+        )
+        _, _, z_decoded = model.encode(batch)
+
+        # 🔽 z_decoded で予測
+        preds_decoded = model.fc_property(z_decoded).detach().cpu()
+        result['prediction_decoded'] = preds_decoded.squeeze(1)
     return result
 
 def main(args):
@@ -265,7 +280,7 @@ def main(args):
             loader = test_loader
         else:
             loader = None
-        optimized_crystals = optimization(model, ld_kwargs, loader)
+        optimized_crystals = optimization(model, ld_kwargs, loader,lr=args.lr,num_starting_points=args.num_starting_points)
         optimized_crystals.update({'eval_setting': args,
                                    'time': time.time() - start_time})
 
@@ -292,6 +307,8 @@ if __name__ == '__main__':
     parser.add_argument('--force_num_atoms', action='store_true')
     parser.add_argument('--force_atom_types', action='store_true')
     parser.add_argument('--down_sample_traj_step', default=10, type=int)
+    parser.add_argument('--lr', default=1e-3, type=float)
+    parser.add_argument('--num_starting_points', default=100, type=int)
     parser.add_argument('--label', default='')
 
     args = parser.parse_args()
