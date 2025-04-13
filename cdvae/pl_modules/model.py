@@ -13,17 +13,52 @@ from tqdm import tqdm
 from cdvae.common.utils import PROJECT_ROOT
 from cdvae.common.data_utils import (
     EPSILON, cart_to_frac_coords, mard, lengths_angles_to_volume,
-    frac_to_cart_coords, min_distance_sqr_pbc)
+    frac_to_cart_coords, min_distance_sqr_pbc, IdentityScaler)
 from cdvae.pl_modules.embeddings import MAX_ATOMIC_NUM
 from cdvae.pl_modules.embeddings import KHOT_EMBEDDINGS
 
 
 def build_mlp(in_dim, hidden_dim, fc_num_layers, out_dim):
-    mods = [nn.Linear(in_dim, hidden_dim), nn.ReLU()]
-    for i in range(fc_num_layers-1):
-        mods += [nn.Linear(hidden_dim, hidden_dim), nn.ReLU()]
-    mods += [nn.Linear(hidden_dim, out_dim)]
-    return nn.Sequential(*mods)
+        
+    if out_dim == 4:
+        print("Using branch structure for 4 outputs !!!")
+        # 各タスクごとの出力ユニット（=分岐構造）
+        branch_gap = nn.Sequential(
+            *([nn.Linear(in_dim, hidden_dim), nn.ReLU()] +
+              [layer for _ in range(fc_num_layers - 1)
+               for layer in (nn.Linear(hidden_dim, hidden_dim), nn.ReLU())] +
+              [nn.Linear(hidden_dim, 1), nn.ReLU()])
+        )
+        branch_eform = nn.Sequential(
+            *([nn.Linear(in_dim, hidden_dim), nn.ReLU()] +
+              [layer for _ in range(fc_num_layers - 1)
+               for layer in (nn.Linear(hidden_dim, hidden_dim), nn.ReLU())] +
+              [nn.Linear(hidden_dim, 1)])
+        )
+        branch_100more = nn.Sequential(
+            *([nn.Linear(in_dim, hidden_dim), nn.ReLU()] +
+              [layer for _ in range(fc_num_layers - 1)
+               for layer in (nn.Linear(hidden_dim, hidden_dim), nn.ReLU())] +
+              [nn.Linear(hidden_dim, 1), nn.Sigmoid()])
+        )
+        branch_tolerance = nn.Sequential(
+            *([nn.Linear(in_dim, hidden_dim), nn.ReLU()] +
+              [layer for _ in range(fc_num_layers - 1)
+               for layer in (nn.Linear(hidden_dim, hidden_dim), nn.ReLU())] +
+              [nn.Linear(hidden_dim, 1), nn.Sigmoid()])
+        )
+        return nn.ModuleList([
+            branch_gap,
+            branch_eform,
+            branch_100more,
+            branch_tolerance,
+        ])
+    else:
+        mods = [nn.Linear(in_dim, hidden_dim), nn.ReLU()]
+        for i in range(fc_num_layers-1):
+            mods += [nn.Linear(hidden_dim, hidden_dim), nn.ReLU()]
+        mods += [nn.Linear(hidden_dim, out_dim)]
+        return nn.Sequential(*mods)
 
 
 class BaseModule(pl.LightningModule):
@@ -451,7 +486,11 @@ class CDVAE(BaseModule):
 
     def predict_property(self, z):
         self.scaler.match_device(z)
-        return self.scaler.inverse_transform(self.fc_property(z))
+        if isinstance(self.fc_property, nn.ModuleList):
+            out = torch.cat([branch(z) for branch in self.fc_property], dim=1)  # (N, 4)
+        else:
+            out = self.fc_property(z)
+        return self.scaler.inverse_transform(out)
 
     def predict_lattice(self, z, num_atoms):
         self.lattice_scaler.match_device(z)
@@ -471,13 +510,32 @@ class CDVAE(BaseModule):
         return pred_composition_per_atom
 
     def num_atom_loss(self, pred_num_atoms, batch):
+        print("🧪 pred_num_atoms.shape:", pred_num_atoms.shape)  # [N, C]
+        print("🧪 batch.num_atoms:", batch.num_atoms)
+        print("🧪 batch.num_atoms max:", batch.num_atoms.max().item())
+        print("🧪 pred_num_atoms.shape[1] (C):", pred_num_atoms.shape[1])
         return F.cross_entropy(pred_num_atoms, batch.num_atoms)
 
     def property_loss(self, z, batch):
-        return F.mse_loss(self.fc_property(z), batch.y)
+        if isinstance(self.fc_property, nn.ModuleList):
+            # タスク個別に損失適用
+            preds = [branch(z) for branch in self.fc_property]  # list of (N, 1)
+            preds = torch.cat(preds, dim=1)  # shape = (N, 4)
+            target = batch.y
+
+            # 各タスクに対応する損失関数
+            gap_loss = F.l1_loss(preds[:, 0], target[:, 0])  # MAE
+            eform_loss = F.l1_loss(preds[:, 1], target[:, 1])  # MAE
+            more_loss = F.binary_cross_entropy(preds[:, 2], target[:, 2])  # sigmoid済
+            tol_loss = F.binary_cross_entropy(preds[:, 3], target[:, 3])  # sigmoid済
+
+            return gap_loss + eform_loss + more_loss + tol_loss
+        else:
+            return F.mse_loss(self.fc_property(z), batch.y)
 
     def lattice_loss(self, pred_lengths_and_angles, batch):
         self.lattice_scaler.match_device(pred_lengths_and_angles)
+    
         if self.hparams.data.lattice_scale_method == 'scale_length':
             target_lengths = batch.lengths / \
                 batch.num_atoms.view(-1, 1).float()**(1/3)
@@ -485,10 +543,24 @@ class CDVAE(BaseModule):
             [target_lengths, batch.angles], dim=-1)
         target_lengths_and_angles = self.lattice_scaler.transform(
             target_lengths_and_angles)
+
         return F.mse_loss(pred_lengths_and_angles, target_lengths_and_angles)
 
     def composition_loss(self, pred_composition_per_atom, target_atom_types, batch):
         target_atom_types = target_atom_types - 1
+
+        # ✅ debug print
+        print("🧪 composition_loss debug:")
+        print(" - target_atom_types min:", target_atom_types.min().item())
+        print(" - target_atom_types max:", target_atom_types.max().item())
+        print(" - pred_composition_per_atom.shape:", pred_composition_per_atom.shape)
+
+        # ✅ check range
+        if target_atom_types.min() < 0 or target_atom_types.max() >= pred_composition_per_atom.size(-1):
+            print("❌ Invalid label detected in composition_loss!")
+            print(" - Unique target_atom_types:", target_atom_types.unique())
+            raise ValueError("target_atom_types out of range")
+    
         loss = F.cross_entropy(pred_composition_per_atom,
                                target_atom_types, reduction='none')
         return scatter(loss, batch.batch, reduce='mean').mean()
@@ -517,6 +589,20 @@ class CDVAE(BaseModule):
     def type_loss(self, pred_atom_types, target_atom_types,
                   used_type_sigmas_per_atom, batch):
         target_atom_types = target_atom_types - 1
+
+        # ✅ debug print
+        print("🧪 type_loss debug:")
+        print(" - target_atom_types min:", target_atom_types.min().item())
+        print(" - target_atom_types max:", target_atom_types.max().item())
+        print(" - pred_atom_types.shape:", pred_atom_types.shape)
+
+        # ✅ check range
+        if target_atom_types.min() < 0 or target_atom_types.max() >= pred_atom_types.size(-1):
+            print("❌ Invalid label detected in type_loss!")
+            unique_types = target_atom_types.unique()
+            print(" - Unique target_atom_types:", unique_types)
+            raise ValueError("target_atom_types out of range")
+    
         loss = F.cross_entropy(
             pred_atom_types, target_atom_types, reduction='none')
         # rescale loss according to noise
@@ -636,6 +722,48 @@ class CDVAE(BaseModule):
                 f'{prefix}_volumes_mard': volumes_mard,
                 f'{prefix}_type_accuracy': type_accuracy,
             })
+
+            # evaluate property prediction.
+            if self.hparams.predict_property and isinstance(self.fc_property, nn.ModuleList):
+                preds = torch.cat([branch(outputs['z']) for branch in self.fc_property], dim=1)
+                target = batch.y
+
+                # 分岐を考慮して逆変換する（分類タスクにはinverseしない）
+                inverse_preds = []
+                for i in range(4):
+                    if not isinstance(self.scaler[i], IdentityScaler):
+                        inverse_preds.append(self.scaler[i].inverse_transform(preds[:, i]))
+                    else:
+                        inverse_preds.append(preds[:, i])
+                scaled_preds = torch.stack(inverse_preds, dim=1)
+                scaled_y = torch.stack([
+                    self.scaler[i].inverse_transform(target[:, i])
+                    if not isinstance(self.scaler[i], IdentityScaler) else target[:, i]
+                    for i in range(4)
+                ], dim=1)
+
+                # MAE for regression
+                gap_mae = F.l1_loss(scaled_preds[:, 0], scaled_y[:, 0])
+                eform_mae = F.l1_loss(scaled_preds[:, 1], scaled_y[:, 1])
+
+                # BCE（分類）そのまま
+                more_bce = F.binary_cross_entropy(preds[:, 2], target[:, 2])
+                tol_bce = F.binary_cross_entropy(preds[:, 3], target[:, 3])
+
+                # Accuracy (optional)
+                more_acc = ((preds[:, 2] > 0.5) == (target[:, 2] > 0.5)).float().mean()
+                tol_acc = ((preds[:, 3] > 0.5) == (target[:, 3] > 0.5)).float().mean()
+
+                log_dict.update({
+                    f'{prefix}_gap_mae': gap_mae,
+                    f'{prefix}_eform_mae': eform_mae,
+                    f'{prefix}_100more_bce': more_bce,
+                    f'{prefix}_tolerance_bce': tol_bce,
+                    f'{prefix}_100more_acc': more_acc,
+                    f'{prefix}_tolerance_acc': tol_acc,
+                })
+
+
 
         return log_dict, loss
 

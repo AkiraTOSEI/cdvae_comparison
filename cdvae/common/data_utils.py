@@ -19,6 +19,16 @@ from torch_scatter import scatter
 from p_tqdm import p_umap
 
 
+class IdentityScaler:
+    def transform(self, x):
+        return torch.tensor(x) if not torch.is_tensor(x) else x
+
+    def inverse_transform(self, x):
+        return x
+
+    def match_device(self, x):
+        pass  # 何もする必要なし
+
 # Tensor of unit cells. Assumes 27 cells in -1, 0, 1 offsets in the x and y dimensions
 # Note that differing from OCP, we have 27 offsets here because we are in 3D
 OFFSET_LIST = [
@@ -650,20 +660,27 @@ def get_scaler_from_data_list(data_list, key):
 def preprocess(input_file, num_workers, niggli, primitive, graph_method,
                prop_list):
     df = pd.read_csv(input_file)
+    failed_ids = []
 
     def process_one(row, niggli, primitive, graph_method, prop_list):
-        crystal_str = row['cif']
-        crystal = build_crystal(
-            crystal_str, niggli=niggli, primitive=primitive)
-        graph_arrays = build_crystal_graph(crystal, graph_method)
-        properties = {k: row[k] for k in prop_list if k in row.keys()}
-        result_dict = {
-            'mp_id': row['material_id'],
-            'cif': crystal_str,
-            'graph_arrays': graph_arrays,
-        }
-        result_dict.update(properties)
-        return result_dict
+        try:
+            crystal_str = row['cif']
+            crystal = build_crystal(
+                crystal_str, niggli=niggli, primitive=primitive)
+            graph_arrays = build_crystal_graph(crystal, graph_method)
+            properties = {k: row[k] for k in prop_list if k in row.keys()}
+            result_dict = {
+                'mp_id': row['material_id'],
+                'cif': crystal_str,
+                'graph_arrays': graph_arrays,
+            }
+            result_dict.update(properties)
+            return result_dict
+        except Exception as e:
+            material_id = row.get('material_id', 'UNKNOWN')
+            print(f"❌ Skipping material_id {material_id} due to error: {e}")
+            failed_ids.append(material_id)
+            return None
 
     unordered_results = p_umap(
         process_one,
@@ -673,10 +690,27 @@ def preprocess(input_file, num_workers, niggli, primitive, graph_method,
         [graph_method] * len(df),
         [prop_list] * len(df),
         num_cpus=num_workers)
+    
+    # None を除外
+    unordered_results = [r for r in unordered_results if r is not None]
 
     mpid_to_results = {result['mp_id']: result for result in unordered_results}
-    ordered_results = [mpid_to_results[df.iloc[idx]['material_id']]
-                       for idx in range(len(df))]
+
+    ordered_results = []
+    missing_ids = []
+
+    for idx in range(len(df)):
+        mid = df.iloc[idx]['material_id']
+        if mid in mpid_to_results:
+            ordered_results.append(mpid_to_results[mid])
+        else:
+            missing_ids.append(mid)
+
+    if missing_ids:
+        print(f"⚠️ {len(missing_ids)} materials missing from processed results.")
+        with open("missing_materials.txt", "w") as f:
+            for mid in missing_ids:
+                f.write(str(mid) + "\n")
 
     return ordered_results
 

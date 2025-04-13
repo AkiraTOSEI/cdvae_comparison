@@ -63,9 +63,18 @@ class CrystDataModule(pl.LightningDataModule):
             self.lattice_scaler = get_scaler_from_data_list(
                 train_dataset.cached_data,
                 key='scaled_lattice')
-            self.scaler = get_scaler_from_data_list(
-                train_dataset.cached_data,
-                key=train_dataset.prop)
+            # ✅ ここを修正：リストかどうかで分岐
+            if isinstance(train_dataset.prop, list):
+                self.scaler = [
+                    get_scaler_from_data_list(train_dataset.cached_data, key=p)
+                    for p in train_dataset.prop
+                ]
+            else:
+                self.scaler = get_scaler_from_data_list(
+                    train_dataset.cached_data,
+                    key=train_dataset.prop)
+            
+
         else:
             self.lattice_scaler = torch.load(
                 Path(scaler_path) / 'lattice_scaler.pt')

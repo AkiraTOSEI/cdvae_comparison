@@ -17,6 +17,7 @@ class CrystDataset(Dataset):
                  prop: ValueNode, niggli: ValueNode, primitive: ValueNode,
                  graph_method: ValueNode, preprocess_workers: ValueNode,
                  lattice_scale_method: ValueNode,
+                 task: ValueNode,
                  **kwargs):
         super().__init__()
         self.path = path
@@ -28,13 +29,20 @@ class CrystDataset(Dataset):
         self.graph_method = graph_method
         self.lattice_scale_method = lattice_scale_method
 
+        self.task = task
+        if self.task == "megnet":
+            self.prop = ["gap", "e_form", "100more", "tolerance"]
+        else:
+            self.prop = [prop]
+
         self.cached_data = preprocess(
             self.path,
             preprocess_workers,
             niggli=self.niggli,
             primitive=self.primitive,
             graph_method=self.graph_method,
-            prop_list=[prop])
+            #prop_list=[self.prop])
+            prop_list=  self.prop)
 
         add_scaled_lattice_prop(self.cached_data, lattice_scale_method)
         self.lattice_scaler = None
@@ -47,7 +55,14 @@ class CrystDataset(Dataset):
         data_dict = self.cached_data[index]
 
         # scaler is set in DataModule set stage
-        prop = self.scaler.transform(data_dict[self.prop])
+        if self.task == "megnet":
+            # 各カラムに対応するスケーラーで変換
+            prop = torch.tensor([
+                self.scaler[i].transform(data_dict[p])
+                for i, p in enumerate(self.prop)
+            ], dtype=torch.float)
+        else:
+            prop = self.scaler.transform(data_dict[self.prop])
         (frac_coords, atom_types, lengths, angles, edge_indices,
          to_jimages, num_atoms) = data_dict['graph_arrays']
 
@@ -126,16 +141,24 @@ class TensorCrystDataset(Dataset):
 @hydra.main(config_path=str(PROJECT_ROOT / "conf"), config_name="default")
 def main(cfg: omegaconf.DictConfig):
     from torch_geometric.data import Batch
-    from cdvae.common.data_utils import get_scaler_from_data_list
+    from cdvae.common.data_utils import get_scaler_from_data_list, IdentityScaler
     dataset: CrystDataset = hydra.utils.instantiate(
         cfg.data.datamodule.datasets.train, _recursive_=False
     )
     lattice_scaler = get_scaler_from_data_list(
         dataset.cached_data,
         key='scaled_lattice')
-    scaler = get_scaler_from_data_list(
-        dataset.cached_data,
-        key=dataset.prop)
+    if dataset.task == "megnet" or dataset.task == 'megnet_perov':
+        scaler = []
+        for p in dataset.prop:
+            if p in ['100more', 'tolerance']:
+                scaler.append(IdentityScaler())  # ← この2つにはスケーラーを適用しない
+            else:
+                scaler.append(get_scaler_from_data_list(dataset.cached_data, key=p))
+    else:
+        scaler = get_scaler_from_data_list(
+            dataset.cached_data,
+            key=dataset.prop)
 
     dataset.lattice_scaler = lattice_scaler
     dataset.scaler = scaler
