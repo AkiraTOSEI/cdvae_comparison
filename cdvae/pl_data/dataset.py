@@ -116,7 +116,9 @@ class TensorCrystDataset(Dataset):
             crystal_array_list,
             niggli=self.niggli,
             primitive=self.primitive,
-            graph_method=self.graph_method)
+            graph_method=self.graph_method,
+            num_cpus=preprocess_workers
+            )
 
         add_scaled_lattice_prop(self.cached_data, lattice_scale_method)
         self.lattice_scaler = None

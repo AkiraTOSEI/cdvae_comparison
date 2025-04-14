@@ -93,10 +93,13 @@ chemical_symbols = [
 CrystalNN = local_env.CrystalNN(
     distance_cutoffs=None, x_diff_weight=-1, porous_adjustment=False)
 
-
+import warnings
 def build_crystal(crystal_str, niggli=True, primitive=False):
     """Build crystal from cif string."""
-    crystal = Structure.from_str(crystal_str, fmt='cif')
+        
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        crystal = Structure.from_str(crystal_str, fmt='cif')
 
     if primitive:
         crystal = crystal.get_primitive_structure()
@@ -719,7 +722,7 @@ def preprocess(input_file, num_workers, niggli, primitive, graph_method,
     return ordered_results
 
 
-def preprocess_tensors(crystal_array_list, niggli, primitive, graph_method):
+def preprocess_tensors(crystal_array_list, niggli, primitive, graph_method,num_cpus=30):
     """
     def process_one(batch_idx, crystal_array, niggli, primitive, graph_method):
         frac_coords = crystal_array['frac_coords']
@@ -745,6 +748,16 @@ def preprocess_tensors(crystal_array_list, niggli, primitive, graph_method):
             atom_types = crystal_array['atom_types']
             lengths = crystal_array['lengths']
             angles = crystal_array['angles']
+
+            print(f"[DEBUG] batch {batch_idx}")
+            print(f"  frac_coords.shape: {getattr(frac_coords, 'shape', type(frac_coords))}")
+            print(f"  atom_types.shape:  {getattr(atom_types, 'shape', type(atom_types))}")
+            print(f"  lengths:           {lengths}")
+            print(f"  angles:            {angles}")
+
+            # ここでクラッシュしている可能性大
+            print(f"  len(atom_types):   {len(atom_types)}")
+
             crystal = Structure(
                 lattice=Lattice.from_parameters(
                     *(lengths.tolist() + angles.tolist())),
@@ -762,16 +775,24 @@ def preprocess_tensors(crystal_array_list, niggli, primitive, graph_method):
         except Exception as e:
             print(f"🛑 Skipping structure {batch_idx} due to error: {e}")
             return None  # 明示的に None を返す
-
-    unordered_results = p_umap(
-        process_one,
-        list(range(len(crystal_array_list))),
-        crystal_array_list,
-        [niggli] * len(crystal_array_list),
-        [primitive] * len(crystal_array_list),
-        [graph_method] * len(crystal_array_list),
-        num_cpus=30,
-    )
+        
+    
+    if num_cpus is None or num_cpus <= 0:
+        print("⚠️ Using single-process preprocessing (no parallelism).")
+        unordered_results = [
+            process_one(i, crystal_array_list[i], niggli, primitive, graph_method)
+            for i in range(len(crystal_array_list))
+        ]
+    else:
+        unordered_results = p_umap(
+            process_one,
+            list(range(len(crystal_array_list))),
+            crystal_array_list,
+            [niggli] * len(crystal_array_list),
+            [primitive] * len(crystal_array_list),
+            [graph_method] * len(crystal_array_list),
+            num_cpus=num_cpus,
+        )
     # None を除外して、正常に処理されたものだけにする
     unordered_results = [r for r in unordered_results if r is not None]
 

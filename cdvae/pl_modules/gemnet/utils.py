@@ -126,12 +126,12 @@ def repeat_blocks(
     # Remove 0 sizes
     sizes_nonzero = sizes > 0
     if not torch.all(sizes_nonzero):
-        #assert block_inc == 0  # Implementing this is not worth the effort
-        # このように変更
-        if isinstance(block_inc, torch.Tensor):
-            print(f"[DEBUG] block_inc != 0: {(block_inc != 0).sum()} / {block_inc.numel()}")
-        else:
-            print(f"[DEBUG] block_inc is not a tensor: {block_inc}")
+        # block_inc が bool や int の場合も tensor に変換して assert できるようにする
+        if isinstance(block_inc, (bool, int)):
+            block_inc = torch.tensor([block_inc], dtype=torch.long, device=sizes.device)
+        elif not isinstance(block_inc, torch.Tensor):
+            raise TypeError(f"[ERROR] block_inc must be Tensor, bool, or int, but got: {type(block_inc)}")
+
         assert torch.all(block_inc == 0), f"block_inc contains non-zero values: {block_inc}"
 
 

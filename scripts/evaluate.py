@@ -1,3 +1,9 @@
+import torch.multiprocessing as mp
+mp.set_start_method("spawn", force=True)  # ← これを一番最初に！
+
+import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
 import time
 import argparse
 import torch
@@ -9,6 +15,22 @@ from types import SimpleNamespace
 from torch_geometric.data import Batch
 
 from eval_utils import load_model
+
+from cdvae.pl_data.dataset import TensorCrystDataset
+from torch_geometric.data import Batch
+
+def build_data_object(model, crystal_dict):
+    dataset = TensorCrystDataset(
+        [crystal_dict],
+        niggli=model.hparams.data.niggli,
+        primitive=model.hparams.data.primitive,
+        graph_method=model.hparams.data.graph_method,
+        lattice_scale_method=model.hparams.data.lattice_scale_method,
+        preprocess_workers=1,
+    )
+    dataset.scaler = model.scaler
+    dataset.lattice_scaler = model.lattice_scaler
+    return dataset[0]
 
 
 def reconstructon(loader, model, ld_kwargs, num_evals,
@@ -185,25 +207,78 @@ def optimization(model, ld_kwargs, data_loader,
         for k in ['frac_coords', 'atom_types', 'num_atoms', 'lengths', 'angles']
     }
 
+    # 🔽 🔽 🔽 ここに①と②を入れる 🔽 🔽 🔽
+    print("[DEBUG] result shapes:")
+    for k, v in result.items():
+        if isinstance(v, torch.Tensor):
+            print(f"  {k}: {v.shape}")
+
+    total_atoms = result['num_atoms'][0].sum().item()
+    frac_coords_count = result['frac_coords'].shape[1]
+    print(f"[DEBUG] total_atoms (from num_atoms): {total_atoms}")
+    print(f"[DEBUG] frac_coords.shape[1]:         {frac_coords_count}")
+
     # 🔽 推論結果を追加：z に対する予測値
     with torch.no_grad():
         # 元の z に対する予測値
         preds = model.fc_property(z).detach().cpu()
         result['prediction'] = preds.squeeze(1)
 
-        # 🔽 crystals の中身を encode（エンコード）して、z を再構成
-        batch = model.build_batch(
-            frac_coords=result['frac_coords'][0].to(model.device),
-            atom_types=result['atom_types'][0].to(model.device),
-            lengths=result['lengths'][0].to(model.device),
-            angles=result['angles'][0].to(model.device),
-            num_atoms=result['num_atoms'][0].to(model.device),
-        )
-        _, _, z_decoded = model.encode(batch)
+        # 全ての構造をまとめて1回でデコードする
+        crystal_list = []
+        # ──────────────────────────────────────────────────────────
+        # ここでフラットな配列を「結晶ごと」に切り分ける
+        # ──────────────────────────────────────────────────────────
+        frac_coords_flat = result['frac_coords'][0].cpu()      # [総原子数, 3]
+        atom_types_flat  = result['atom_types'][0].cpu()        # [総原子数]
+        lengths_all      = result['lengths'][0].cpu()           # [結晶数, 3]
+        angles_all       = result['angles'][0].cpu()            # [結晶数, 3]
+        num_atoms_all    = result['num_atoms'][0].cpu().tolist()# [結晶数]
 
-        # 🔽 z_decoded で予測
-        preds_decoded = model.fc_property(z_decoded).detach().cpu()
+        crystal_list = []
+        ptr = 0
+        for i, n in enumerate(num_atoms_all):
+            n = int(n)              # tensor → int
+            if n == 0:              # 念のため
+                continue
+
+            fc = frac_coords_flat[ptr:ptr+n]        # [n, 3]
+            at = atom_types_flat[ptr:ptr+n]         # [n]
+            ptr += n
+
+            crystal_dict = {
+                'frac_coords': fc,                  # tensor(float32) で OK
+                'atom_types' : at,                  # tensor(int64)   で OK
+                'lengths'    : lengths_all[i],      # tensor(3)
+                'angles'     : angles_all[i],       # tensor(3)
+                'num_atoms'  : n,
+            }
+            crystal_list.append(crystal_dict)
+
+        print(f"[DEBUG] crystal_list length (after regroup) = {len(crystal_list)}")
+
+        dataset = TensorCrystDataset(
+            crystal_list,
+            niggli=model.hparams.data.niggli,
+            primitive=model.hparams.data.primitive,
+            graph_method=model.hparams.data.graph_method,
+            lattice_scale_method=model.hparams.data.lattice_scale_method,
+            preprocess=False,
+            preprocess_workers=0,  # 並列数は任意で調整
+        )
+        dataset.scaler = model.scaler
+        dataset.lattice_scaler = model.lattice_scaler
+
+        # 🔽🔽ここに⑤を挿入🔽🔽
+        print(f"[DEBUG] Dataset[0] keys: {dataset[0].__dict__.keys()}")
+
+        batch = Batch.from_data_list(dataset).to(model.device)
+        print(f"[DEBUG] batch size: {batch.num_graphs}")
+        _, _, decoded_z = model.encode(batch)
+
+        preds_decoded = model.fc_property(decoded_z).detach().cpu()
         result['prediction_decoded'] = preds_decoded.squeeze(1)
+
     return result
 
 def main(args):
@@ -280,7 +355,7 @@ def main(args):
             loader = test_loader
         else:
             loader = None
-        optimized_crystals = optimization(model, ld_kwargs, loader,lr=args.lr,num_starting_points=args.num_starting_points)
+        optimized_crystals = optimization(model, ld_kwargs, loader,lr=args.lr,num_starting_points=args.num_starting_points, num_gradient_steps=args.num_gradient_steps,num_saved_crys=args.num_saved_crys)
         optimized_crystals.update({'eval_setting': args,
                                    'time': time.time() - start_time})
 
@@ -291,7 +366,9 @@ def main(args):
         torch.save(optimized_crystals, model_path / gen_out_name)
 
 
+
 if __name__ == '__main__':
+
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_path', required=True)
     parser.add_argument('--tasks', nargs='+', default=['recon', 'gen', 'opt'])
@@ -309,6 +386,8 @@ if __name__ == '__main__':
     parser.add_argument('--down_sample_traj_step', default=10, type=int)
     parser.add_argument('--lr', default=1e-3, type=float)
     parser.add_argument('--num_starting_points', default=100, type=int)
+    parser.add_argument('--num_gradient_steps', default=5000, type=int)
+    parser.add_argument('--num_saved_crys', default=10, type=int)
     parser.add_argument('--label', default='')
 
     args = parser.parse_args()
