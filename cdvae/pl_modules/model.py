@@ -110,7 +110,7 @@ class CrystGNN_Supervise(BaseModule):
         return loss
 
     def validation_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
-        print(f"✅ validation_step called! batch_idx = {batch_idx}")
+        #print(f"✅ validation_step called! batch_idx = {batch_idx}")
         preds = self(batch)
 
         log_dict, loss = self.compute_stats(batch, preds, prefix='val')
@@ -127,7 +127,8 @@ class CrystGNN_Supervise(BaseModule):
         return loss
 
     def validation_epoch_end(self, outputs):
-        print("✅✅ validation_epoch_end called!")
+        #("✅✅ validation_epoch_end called!")
+        pass
 
     def test_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
 
@@ -390,11 +391,11 @@ class CDVAE(BaseModule):
             pred_composition_probs * used_type_sigmas_per_atom[:, None])
         # 🔍 debug
         probs = atom_type_probs.sum(dim=1)
-        print("🔍 multinomial sampling debug")
-        print(" - probs.min():", probs.min().item())
-        print(" - probs.max():", probs.max().item())
-        print(" - probs.isnan().any():", torch.isnan(probs).any().item())
-        print(" - probs.isinf().any():", torch.isinf(probs).any().item())
+        #print("🔍 multinomial sampling debug")
+        #print(" - probs.min():", probs.min().item())
+        #print(" - probs.max():", probs.max().item())
+        #print(" - probs.isnan().any():", torch.isnan(probs).any().item())
+        #print(" - probs.isinf().any():", torch.isinf(probs).any().item())
         rand_atom_types = torch.multinomial(
             atom_type_probs, num_samples=1).squeeze(1) + 1
 
@@ -529,10 +530,10 @@ class CDVAE(BaseModule):
         return pred_composition_per_atom
 
     def num_atom_loss(self, pred_num_atoms, batch):
-        print("🧪 pred_num_atoms.shape:", pred_num_atoms.shape)  # [N, C]
-        print("🧪 batch.num_atoms:", batch.num_atoms)
-        print("🧪 batch.num_atoms max:", batch.num_atoms.max().item())
-        print("🧪 pred_num_atoms.shape[1] (C):", pred_num_atoms.shape[1])
+        #print("🧪 pred_num_atoms.shape:", pred_num_atoms.shape)  # [N, C]
+        #print("🧪 batch.num_atoms:", batch.num_atoms)
+        #print("🧪 batch.num_atoms max:", batch.num_atoms.max().item())
+        #print("🧪 pred_num_atoms.shape[1] (C):", pred_num_atoms.shape[1])
         return F.cross_entropy(pred_num_atoms, batch.num_atoms)
 
     def property_loss(self, z, batch):
@@ -569,10 +570,10 @@ class CDVAE(BaseModule):
         target_atom_types = target_atom_types - 1
 
         # ✅ debug print
-        print("🧪 composition_loss debug:")
-        print(" - target_atom_types min:", target_atom_types.min().item())
-        print(" - target_atom_types max:", target_atom_types.max().item())
-        print(" - pred_composition_per_atom.shape:", pred_composition_per_atom.shape)
+        #print("🧪 composition_loss debug:")
+        #print(" - target_atom_types min:", target_atom_types.min().item())
+        #print(" - target_atom_types max:", target_atom_types.max().item())
+        #print(" - pred_composition_per_atom.shape:", pred_composition_per_atom.shape)
 
         # ✅ check range
         if target_atom_types.min() < 0 or target_atom_types.max() >= pred_composition_per_atom.size(-1):
@@ -610,10 +611,10 @@ class CDVAE(BaseModule):
         target_atom_types = target_atom_types - 1
 
         # ✅ debug print
-        print("🧪 type_loss debug:")
-        print(" - target_atom_types min:", target_atom_types.min().item())
-        print(" - target_atom_types max:", target_atom_types.max().item())
-        print(" - pred_atom_types.shape:", pred_atom_types.shape)
+        #print("🧪 type_loss debug:")
+        #print(" - target_atom_types min:", target_atom_types.min().item())
+        #print(" - target_atom_types max:", target_atom_types.max().item())
+        #print(" - pred_atom_types.shape:", pred_atom_types.shape)
 
         # ✅ check range
         if target_atom_types.min() < 0 or target_atom_types.max() >= pred_atom_types.size(-1):
