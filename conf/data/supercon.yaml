@@ -28,6 +28,7 @@ datamodule:
       name: Formation energy train
       path: ${data.root_path}/train.csv
       prop: ${data.prop}
+      task: regression
       niggli: ${data.niggli}
       primitive: ${data.primitive}
       graph_method: ${data.graph_method}
@@ -39,6 +40,7 @@ datamodule:
         name: Formation energy val
         path: ${data.root_path}/val.csv
         prop: ${data.prop}
+        task: regression
         niggli: ${data.niggli}
         primitive: ${data.primitive}
         graph_method: ${data.graph_method}
@@ -50,6 +52,7 @@ datamodule:
         name: tc train
         path: ${data.root_path}/test.csv
         prop: ${data.prop}
+        task: regression
         niggli: ${data.niggli}
         primitive: ${data.primitive}
         graph_method: ${data.graph_method}
