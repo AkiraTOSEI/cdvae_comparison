@@ -190,14 +190,21 @@ def optimization(model, ld_kwargs, data_loader,
     model.freeze()
 
     all_crystals = []
-    interval = num_gradient_steps // (num_saved_crys-1)
+    if num_saved_crys <= 1:
+        save_last_only = True
+    else:
+        save_last_only = False
+        interval = num_gradient_steps // (num_saved_crys-1)
+
     for i in tqdm(range(num_gradient_steps)):
         opt.zero_grad()
         loss = sign * model.fc_property(z).mean()  # 🔽 ここが切り替えポイント
         loss.backward()
         opt.step()
 
-        if i % interval == 0 or i == (num_gradient_steps-1):
+        # とりあえず消してみる
+        if (save_last_only and i == num_gradient_steps - 1) or (not save_last_only and (i % interval == 0 or i == num_gradient_steps - 1)):
+            print(f'Current step:{i}.')
             crystals = model.langevin_dynamics(z, ld_kwargs)
             all_crystals.append(crystals)
     #return {k: torch.cat([d[k] for d in all_crystals]).unsqueeze(0) for k in
@@ -236,6 +243,8 @@ def optimization(model, ld_kwargs, data_loader,
         num_atoms_all    = result['num_atoms'][0].cpu().tolist()# [結晶数]
 
         crystal_list = []
+        parent_indices = []       # ★追加：親 z のインデックス
+
         ptr = 0
         for i, n in enumerate(num_atoms_all):
             n = int(n)              # tensor → int
@@ -254,6 +263,7 @@ def optimization(model, ld_kwargs, data_loader,
                 'num_atoms'  : n,
             }
             crystal_list.append(crystal_dict)
+            parent_indices.append(i % num_starting_points)
 
         print(f"[DEBUG] crystal_list length (after regroup) = {len(crystal_list)}")
 
@@ -272,12 +282,22 @@ def optimization(model, ld_kwargs, data_loader,
         # 🔽🔽ここに⑤を挿入🔽🔽
         print(f"[DEBUG] Dataset[0] keys: {dataset[0].__dict__.keys()}")
 
+        # Dataset の長さが「前処理を通った結晶数」
+        parent_indices = torch.tensor(parent_indices)[:len(dataset)]
+
         batch = Batch.from_data_list(dataset).to(model.device)
         print(f"[DEBUG] batch size: {batch.num_graphs}")
         _, _, decoded_z = model.encode(batch)
 
         preds_decoded = model.fc_property(decoded_z).detach().cpu()
         result['prediction_decoded'] = preds_decoded.squeeze(1)
+
+        # ★ prediction を同じ長さにそろえて格納
+        result['prediction_matched'] = preds[parent_indices].squeeze(1)
+
+        # 例：誤差を確認
+        diff = (result['prediction_matched'] - result['prediction_decoded']).abs()
+        print("MAE =", diff.mean().item())
 
     return result
 
