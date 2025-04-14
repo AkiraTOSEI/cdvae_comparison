@@ -18,7 +18,7 @@ from cdvae.pl_modules.embeddings import MAX_ATOMIC_NUM
 from cdvae.pl_modules.embeddings import KHOT_EMBEDDINGS
 
 
-def build_mlp(in_dim, hidden_dim, fc_num_layers, out_dim):
+def build_mlp(in_dim, hidden_dim, fc_num_layers, out_dim, fin_act=None):
         
     if out_dim == 4:
         print("Using branch structure for 4 outputs !!!")
@@ -57,7 +57,10 @@ def build_mlp(in_dim, hidden_dim, fc_num_layers, out_dim):
         mods = [nn.Linear(in_dim, hidden_dim), nn.ReLU()]
         for i in range(fc_num_layers-1):
             mods += [nn.Linear(hidden_dim, hidden_dim), nn.ReLU()]
-        mods += [nn.Linear(hidden_dim, out_dim)]
+        if fin_act == 'relu':
+            mods += [nn.Linear(hidden_dim, out_dim), nn.ReLU()]
+        else:
+            mods += [nn.Linear(hidden_dim, out_dim)]
         return nn.Sequential(*mods)
 
 
@@ -195,8 +198,17 @@ class CDVAE(BaseModule):
                                         self.hparams.fc_num_layers, MAX_ATOMIC_NUM)
         # for property prediction.
         if self.hparams.predict_property:
-            self.fc_property = build_mlp(self.hparams.latent_dim, self.hparams.hidden_dim,
-                                         self.hparams.fc_num_layers, 1)
+            if self.hparams.task == "megnet":
+                print("Using branch structure for 4 outputs !!!")
+                print("MEGNET Mode")
+                self.fc_property = build_mlp(self.hparams.latent_dim, self.hparams.hidden_dim,
+                                             self.hparams.fc_num_layers, 4)
+            elif self.hparams.task == 'supercon':
+                self.fc_property = build_mlp(self.hparams.latent_dim, self.hparams.hidden_dim,
+                                            self.hparams.fc_num_layers, 1, fin_act='relu')
+            else:
+                self.fc_property = build_mlp(self.hparams.latent_dim, self.hparams.hidden_dim,
+                                            self.hparams.fc_num_layers, 1)
 
         sigmas = torch.tensor(np.exp(np.linspace(
             np.log(self.hparams.sigma_begin),

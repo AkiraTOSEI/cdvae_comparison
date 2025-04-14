@@ -164,7 +164,10 @@ def main(cfg: omegaconf.DictConfig):
     lattice_scaler = get_scaler_from_data_list(
         dataset.cached_data,
         key='scaled_lattice')
+    print(f"[DEBUG] dataset.task: {dataset.task}")
     if dataset.task == "megnet" or dataset.task == 'megnet_perov':
+        print(f"dataset.prop: {dataset.prop}")
+        print('use special scaler')
         scaler = []
         for p in dataset.prop:
             if p in ['100more', 'tolerance']:

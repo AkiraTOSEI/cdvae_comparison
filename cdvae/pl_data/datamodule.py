@@ -11,6 +11,7 @@ from omegaconf import DictConfig
 from torch.utils.data import Dataset
 from torch_geometric.data import DataLoader
 from torch.utils.data import ConcatDataset
+from cdvae.common.data_utils import get_scaler_from_data_list, IdentityScaler
 
 from cdvae.common.utils import PROJECT_ROOT
 from cdvae.common.data_utils import get_scaler_from_data_list
@@ -58,29 +59,43 @@ class CrystDataModule(pl.LightningDataModule):
     def prepare_data(self) -> None:
         # download only
         pass
+
     def get_scaler(self, scaler_path):
-        # Load once to compute property scaler
+        # scaler_path が None の場合、train dataset からスケーラーを作成する
         if scaler_path is None:
-            train_dataset = hydra.utils.instantiate(self.datasets.train)
+            # _recursive_=True を使うと、設定値が再帰的に反映されます
+            train_dataset = hydra.utils.instantiate(self.datasets.train, _recursive_=True)
             self.lattice_scaler = get_scaler_from_data_list(
                 train_dataset.cached_data,
-                key='scaled_lattice')
-            # ✅ ここを修正：リストかどうかで分岐
-            if isinstance(train_dataset.prop, list):
-                self.scaler = [
-                    get_scaler_from_data_list(train_dataset.cached_data, key=p)
-                    for p in train_dataset.prop
-                ]
-            else:
-                self.scaler = get_scaler_from_data_list(
-                    train_dataset.cached_data,
-                    key=train_dataset.prop)
+                key='scaled_lattice'
+            )
+            print(f"[DEBUG] train_dataset.task: {train_dataset.task}", flush=True)
             
-
+            # task の値でスケーラーの生成方法を分岐
+            if train_dataset.task in ["megnet", "megnet_perov"]:
+                print(f"[DEBUG] Using special scaler; dataset.prop: {train_dataset.prop}", flush=True)
+                scaler = []
+                for p in train_dataset.prop:
+                    if p in ['100more', 'tolerance']:
+                        # これらのプロパティは IdentityScaler を使用する
+                        scaler.append(IdentityScaler())
+                    else:
+                        scaler.append(get_scaler_from_data_list(train_dataset.cached_data, key=p))
+                self.scaler = scaler
+            else:
+                # 通常の場合
+                if isinstance(train_dataset.prop, list):
+                    self.scaler = [
+                        get_scaler_from_data_list(train_dataset.cached_data, key=p)
+                        for p in train_dataset.prop
+                    ]
+                else:
+                    self.scaler = get_scaler_from_data_list(train_dataset.cached_data, key=train_dataset.prop)
         else:
-            self.lattice_scaler = torch.load(
-                Path(scaler_path) / 'lattice_scaler.pt')
+            # スケーラーが保存されたパスが指定されている場合はそれをロード
+            self.lattice_scaler = torch.load(Path(scaler_path) / 'lattice_scaler.pt')
             self.scaler = torch.load(Path(scaler_path) / 'prop_scaler.pt')
+
 
     def setup(self, stage: Optional[str] = None):
         """
@@ -109,6 +124,8 @@ class CrystDataModule(pl.LightningDataModule):
             for test_dataset in self.test_datasets:
                 test_dataset.lattice_scaler = self.lattice_scaler
                 test_dataset.scaler = self.scaler
+
+                
 
     def train_dataloader(self) -> DataLoader:
         valid_data = [d for d in (self.train_dataset[i] for i in range(len(self.train_dataset))) if d is not None]

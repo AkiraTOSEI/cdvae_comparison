@@ -108,6 +108,8 @@ def run(cfg: DictConfig) -> None:
     # Instantiate the callbacks
     callbacks: List[Callback] = build_callbacks(cfg=cfg)
 
+    print("🚀 config debugging",OmegaConf.to_yaml(cfg))
+
     # Logger instantiation/configuration
     wandb_logger = None
     if "wandb" in cfg.logging:
@@ -150,6 +152,8 @@ def run(cfg: DictConfig) -> None:
         **cfg.train.pl_trainer,
     )
     log_hyperparameters(trainer=trainer, model=model, cfg=cfg)
+    
+
     print("🚀 [Trainer Start] max_epochs =", trainer.max_epochs)
     print("🚀 [val_check_interval] =", trainer.check_val_every_n_epoch)
     hydra.utils.log.info("Starting training!")
