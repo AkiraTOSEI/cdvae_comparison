@@ -79,21 +79,24 @@ class CrystDataset(Dataset):
         print(f"  - to_jimages shape: {to_jimages.shape}")
         print(f"  - lengths: {lengths}")
         print(f"  - angles: {angles}")
-    
-        data = Data(
-            frac_coords=torch.Tensor(frac_coords),
-            atom_types=torch.LongTensor(atom_types),
-            lengths=torch.Tensor(lengths).view(1, -1),
-            angles=torch.Tensor(angles).view(1, -1),
-            edge_index=torch.LongTensor(
-                edge_indices.T).contiguous(),  # shape (2, num_edges)
-            to_jimages=torch.LongTensor(to_jimages),
-            num_atoms=num_atoms,
-            num_bonds=edge_indices.shape[0],
-            num_nodes=num_atoms,  # special attribute used for batching in pytorch geometric
-            y=prop.view(1, -1),
-        )
-        return data
+        try:
+            data = Data(
+                frac_coords=torch.Tensor(frac_coords),
+                atom_types=torch.LongTensor(atom_types),
+                lengths=torch.Tensor(lengths).view(1, -1),
+                angles=torch.Tensor(angles).view(1, -1),
+                edge_index=torch.LongTensor(
+                    edge_indices.T).contiguous(),  # shape (2, num_edges)
+                to_jimages=torch.LongTensor(to_jimages),
+                num_atoms=num_atoms,
+                num_bonds=edge_indices.shape[0],
+                num_nodes=num_atoms,  # special attribute used for batching in pytorch geometric
+                y=prop.view(1, -1),
+            )
+            return data
+        except Exception as e:
+            print(f"🛑 Skipping index {index} due to exception in __getitem__: {e}")
+            return None  # PyGのBatchではNoneがあるとエラーになるので注意（次で除去する）
 
     def __repr__(self) -> str:
         return f"CrystDataset({self.name=}, {self.path=})"
