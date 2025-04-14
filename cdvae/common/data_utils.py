@@ -120,8 +120,12 @@ def build_crystal_graph(crystal, graph_method='crystalnn'):
     """
 
     if graph_method == 'crystalnn':
-        crystal_graph = StructureGraph.with_local_env_strategy(
-            crystal, CrystalNN)
+        try:
+            crystal_graph = StructureGraph.with_local_env_strategy(
+                crystal, CrystalNN)
+        except Exception as e:
+            print(f"❌ Failed to build crystal graph with CrystalNN: {e}")
+            return None  # ← 呼び出し元でチェックする前提
     elif graph_method == 'none':
         pass
     else:
@@ -748,6 +752,8 @@ def preprocess_tensors(crystal_array_list, niggli, primitive, graph_method):
                 coords=frac_coords,
                 coords_are_cartesian=False)
             graph_arrays = build_crystal_graph(crystal, graph_method)
+            if graph_arrays is None:
+                raise ValueError("Graph building failed and returned None.")
             result_dict = {
                 'batch_idx': batch_idx,
                 'graph_arrays': graph_arrays,
