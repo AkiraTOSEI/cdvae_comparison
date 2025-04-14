@@ -124,7 +124,7 @@ def build_crystal_graph(crystal, graph_method='crystalnn'):
 
     if graph_method == 'crystalnn':
         try:
-            crystal_graph = StructureGraph.with_local_env_strategy(
+            crystal_graph = StructureGraph.from_local_env_strategy(
                 crystal, CrystalNN)
         except Exception as e:
             print(f"❌ Failed to build crystal graph with CrystalNN: {e}")
@@ -675,6 +675,8 @@ def preprocess(input_file, num_workers, niggli, primitive, graph_method,
             crystal = build_crystal(
                 crystal_str, niggli=niggli, primitive=primitive)
             graph_arrays = build_crystal_graph(crystal, graph_method)
+            if graph_arrays is None:
+                raise ValueError("Graph building failed and returned None.")
             properties = {k: row[k] for k in prop_list if k in row.keys()}
             result_dict = {
                 'mp_id': row['material_id'],
@@ -688,15 +690,25 @@ def preprocess(input_file, num_workers, niggli, primitive, graph_method,
             print(f"❌ Skipping material_id {material_id} due to error: {e}")
             failed_ids.append(material_id)
             return None
-
-    unordered_results = p_umap(
-        process_one,
+    
+    def safe_process_one(args):
+        try:
+            return process_one(*args)
+        except Exception as e:
+            print(f"❌ Error in safe_process_one: {e}", flush=True)
+            return None
+        
+    args_list = list(zip(
         [df.iloc[idx] for idx in range(len(df))],
         [niggli] * len(df),
         [primitive] * len(df),
         [graph_method] * len(df),
         [prop_list] * len(df),
-        num_cpus=num_workers)
+    ))
+
+    unordered_results = p_umap(safe_process_one, args_list, num_cpus=num_workers)
+    unordered_results = [r for r in unordered_results if r is not None]
+    
     
     # None を除外
     unordered_results = [r for r in unordered_results if r is not None]
