@@ -716,6 +716,7 @@ def preprocess(input_file, num_workers, niggli, primitive, graph_method,
 
 
 def preprocess_tensors(crystal_array_list, niggli, primitive, graph_method):
+    """
     def process_one(batch_idx, crystal_array, niggli, primitive, graph_method):
         frac_coords = crystal_array['frac_coords']
         atom_types = crystal_array['atom_types']
@@ -733,6 +734,28 @@ def preprocess_tensors(crystal_array_list, niggli, primitive, graph_method):
             'graph_arrays': graph_arrays,
         }
         return result_dict
+    """
+    def process_one(batch_idx, crystal_array, niggli, primitive, graph_method):
+        try:
+            frac_coords = crystal_array['frac_coords']
+            atom_types = crystal_array['atom_types']
+            lengths = crystal_array['lengths']
+            angles = crystal_array['angles']
+            crystal = Structure(
+                lattice=Lattice.from_parameters(
+                    *(lengths.tolist() + angles.tolist())),
+                species=atom_types,
+                coords=frac_coords,
+                coords_are_cartesian=False)
+            graph_arrays = build_crystal_graph(crystal, graph_method)
+            result_dict = {
+                'batch_idx': batch_idx,
+                'graph_arrays': graph_arrays,
+            }
+            return result_dict
+        except Exception as e:
+            print(f"🛑 Skipping structure {batch_idx} due to error: {e}")
+            return None  # 明示的に None を返す
 
     unordered_results = p_umap(
         process_one,
@@ -743,8 +766,13 @@ def preprocess_tensors(crystal_array_list, niggli, primitive, graph_method):
         [graph_method] * len(crystal_array_list),
         num_cpus=30,
     )
+    # None を除外して、正常に処理されたものだけにする
+    unordered_results = [r for r in unordered_results if r is not None]
+
     ordered_results = list(
         sorted(unordered_results, key=lambda x: x['batch_idx']))
+    print(f"✅ Preprocessing done. Kept {len(ordered_results)} / {len(crystal_array_list)}")
+
     return ordered_results
 
 

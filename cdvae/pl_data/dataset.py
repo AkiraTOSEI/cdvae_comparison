@@ -33,7 +33,9 @@ class CrystDataset(Dataset):
         if self.task == "megnet":
             self.prop = ["gap", "e_form", "100more", "tolerance"]
         else:
-            self.prop = [prop]
+            self.prop = prop
+
+        prop_list = self.prop if isinstance(self.prop, list) else [self.prop]
 
         self.cached_data = preprocess(
             self.path,
@@ -42,7 +44,7 @@ class CrystDataset(Dataset):
             primitive=self.primitive,
             graph_method=self.graph_method,
             #prop_list=[self.prop])
-            prop_list=  self.prop)
+            prop_list=  prop_list)
 
         add_scaled_lattice_prop(self.cached_data, lattice_scale_method)
         self.lattice_scaler = None
@@ -69,6 +71,15 @@ class CrystDataset(Dataset):
         # atom_coords are fractional coordinates
         # edge_index is incremented during batching
         # https://pytorch-geometric.readthedocs.io/en/latest/notes/batching.html
+        print(f"\n🧪 index {index}")
+        print(f"  - num_atoms: {num_atoms}")
+        print(f"  - atom_types: {atom_types}")
+        print(f"  - frac_coords shape: {frac_coords.shape}")
+        print(f"  - edge_indices shape: {edge_indices.shape}")
+        print(f"  - to_jimages shape: {to_jimages.shape}")
+        print(f"  - lengths: {lengths}")
+        print(f"  - angles: {angles}")
+    
         data = Data(
             frac_coords=torch.Tensor(frac_coords),
             atom_types=torch.LongTensor(atom_types),

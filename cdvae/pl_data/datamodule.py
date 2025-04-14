@@ -33,6 +33,8 @@ def worker_init_fn(id: int):
     np.random.seed(ss.generate_state(4))
     random.seed(uint64_seed)
 
+def collate_skip_none(batch):
+    return DataLoader.collate([b for b in batch if b is not None])
 
 class CrystDataModule(pl.LightningDataModule):
     def __init__(
@@ -109,12 +111,14 @@ class CrystDataModule(pl.LightningDataModule):
                 test_dataset.scaler = self.scaler
 
     def train_dataloader(self) -> DataLoader:
+        valid_data = [d for d in (self.train_dataset[i] for i in range(len(self.train_dataset))) if d is not None]
         return DataLoader(
-            self.train_dataset,
+            valid_data,
             shuffle=True,
             batch_size=self.batch_size.train,
             num_workers=self.num_workers.train,
             worker_init_fn=worker_init_fn,
+            collate_fn=collate_skip_none,  # ← これを追加
         )
 
     def val_dataloader(self) -> Sequence[DataLoader]:
@@ -129,27 +133,36 @@ class CrystDataModule(pl.LightningDataModule):
             )
             for dataset in self.val_datasets
         ]"""
-        concat_val_dataset = ConcatDataset(self.val_datasets)
-
+        #concat_val_dataset = ConcatDataset(self.val_datasets)
+        valid_data = []
+        for dataset in self.val_datasets:
+            for i in range(len(dataset)):
+                d = dataset[i]
+                if d is not None:
+                    valid_data.append(d)
         return DataLoader(
-            concat_val_dataset,
+            valid_data,
             shuffle=False,
             batch_size=self.batch_size.val,
             num_workers=self.num_workers.val,
             worker_init_fn=worker_init_fn,
+            collate_fn=collate_skip_none,  # ← これを追加
         )
 
     def test_dataloader(self) -> Sequence[DataLoader]:
-        return [
-            DataLoader(
-                dataset,
+        loaders = []
+        for dataset in self.test_datasets:
+            valid_data = [d for d in (dataset[i] for i in range(len(dataset))) if d is not None]
+            loader = DataLoader(
+                valid_data,
                 shuffle=False,
                 batch_size=self.batch_size.test,
                 num_workers=self.num_workers.test,
                 worker_init_fn=worker_init_fn,
+                collate_fn=collate_skip_none,
             )
-            for dataset in self.test_datasets
-        ]
+            loaders.append(loader)
+        return loaders
 
     def __repr__(self) -> str:
         return (

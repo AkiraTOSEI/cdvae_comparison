@@ -126,7 +126,15 @@ def repeat_blocks(
     # Remove 0 sizes
     sizes_nonzero = sizes > 0
     if not torch.all(sizes_nonzero):
-        assert block_inc == 0  # Implementing this is not worth the effort
+        #assert block_inc == 0  # Implementing this is not worth the effort
+        # このように変更
+        if isinstance(block_inc, torch.Tensor):
+            print(f"[DEBUG] block_inc != 0: {(block_inc != 0).sum()} / {block_inc.numel()}")
+        else:
+            print(f"[DEBUG] block_inc is not a tensor: {block_inc}")
+        assert torch.all(block_inc == 0), f"block_inc contains non-zero values: {block_inc}"
+
+
         sizes = torch.masked_select(sizes, sizes_nonzero)
         if isinstance(repeats, torch.Tensor):
             repeats = torch.masked_select(repeats, sizes_nonzero)
