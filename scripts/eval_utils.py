@@ -83,6 +83,7 @@ def load_model(model_path, load_data=False, testing=True):
         model.scaler = torch.load(model_path / 'prop_scaler.pt')
 
         if load_data:
+            #cfg.data.datamodule.batch_size.test = 1 # for testing
             datamodule = hydra.utils.instantiate(
                 cfg.data.datamodule, _recursive_=False, scaler_path=model_path
             )

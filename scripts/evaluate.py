@@ -163,6 +163,23 @@ def generation(model, ld_kwargs, num_batches_to_sample, num_samples_per_z,
             all_frac_coords_stack, all_atom_types_stack)
 
 
+######################## 変更後のイメージ ########################
+def _sample_one(model, ld_kwargs, z_i, retry=3):
+    """GemNet が落ちる結晶をスキップして再試行"""
+    for _ in range(retry):
+        try:
+            out = model.langevin_dynamics(z_i, ld_kwargs)
+            return {k: (v.detach().cpu() if torch.is_tensor(v) else v)
+                    for k, v in out.items()}
+        except RuntimeError as e:
+            if "input.numel() == 0" in str(e):
+                # triplet が 0 件 → 新しい乱数でサンプリングし直す
+                z_i = torch.randn_like(z_i)
+                continue
+            raise
+    raise RuntimeError("GemNet failed after retrying")
+#################################################################
+
 def optimization(model, ld_kwargs, data_loader,
                  num_starting_points=100, num_gradient_steps=5000,
                  lr=1e-3, num_saved_crys=10):
@@ -202,15 +219,39 @@ def optimization(model, ld_kwargs, data_loader,
         loss.backward()
         opt.step()
 
-        # とりあえず消してみる
-        if (save_last_only and i == num_gradient_steps - 1) or (not save_last_only and (i % interval == 0 or i == num_gradient_steps - 1)):
-            print(f'Current step:{i}.')
-            crystals = model.langevin_dynamics(z, ld_kwargs)
-            all_crystals.append(crystals)
+        #if (save_last_only and i == num_gradient_steps - 1) or (not save_last_only and (i % interval == 0 or i == num_gradient_steps - 1)):
+        #    print(f'Current step:{i}.')
+        #    crystals = model.langevin_dynamics(z, ld_kwargs)
+        #    all_crystals.append(crystals)
+        # ─────────────────────────────────────────────
+        # ★ 1 結晶ずつ langevin_dynamics を回す ★
+        # ─────────────────────────────────────────────
+        if (save_last_only and i == num_gradient_steps - 1) or \
+           (not save_last_only and (i % interval == 0 or i == num_gradient_steps - 1)):
+
+            print(f'Current step:{i}.  sampling each z separately...')
+            crystal_dicts = []
+            for j in range(z.shape[0]):          # = num_starting_points
+                out = _sample_one(model, ld_kwargs, z[j:j+1])
+                crystal_dicts.append(out)
+
+            # keys: frac_coords, atom_types, num_atoms, lengths, angles
+            merged = {}
+            for k in crystal_dicts[0]:
+                if torch.is_tensor(crystal_dicts[0][k]):
+                    merged[k] = torch.cat([d[k] for d in crystal_dicts], dim=0)
+                else:
+                    merged[k] = [d[k] for d in crystal_dicts]    
+            all_crystals.append(merged)
     #return {k: torch.cat([d[k] for d in all_crystals]).unsqueeze(0) for k in
     #        ['frac_coords', 'atom_types', 'num_atoms', 'lengths', 'angles']}
-    result = {
-        k: torch.cat([d[k] for d in all_crystals]).unsqueeze(0)
+    #result = {
+    #    k: torch.cat([d[k] for d in all_crystals]).unsqueeze(0)
+    #    for k in ['frac_coords', 'atom_types', 'num_atoms', 'lengths', 'angles']
+    #}
+    result = {                                   # shape = [save_step, N*, ...]
+        k: torch.stack([torch.tensor(d[k]) if isinstance(d[k], float) else d[k]
+                        for d in all_crystals], dim=0)
         for k in ['frac_coords', 'atom_types', 'num_atoms', 'lengths', 'angles']
     }
 
