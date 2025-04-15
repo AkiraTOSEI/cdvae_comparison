@@ -19,6 +19,17 @@ from eval_utils import load_model
 from cdvae.pl_data.dataset import TensorCrystDataset
 from torch_geometric.data import Batch
 
+import torch.nn as nn
+
+def _raw_property_preds(model, z):
+    """
+    MEGNet 用に ModuleList を束ねて (N,4) テンソルを返すヘルパ
+    """
+    if isinstance(model.fc_property, nn.ModuleList):
+        return torch.cat([branch(z) for branch in model.fc_property], dim=1)
+    else:                       # supercon など (N,1)
+        return model.fc_property(z)
+
 def build_data_object(model, crystal_dict):
     dataset = TensorCrystDataset(
         [crystal_dict],
@@ -182,7 +193,9 @@ def _sample_one(model, ld_kwargs, z_i, retry=3):
 
 def optimization(model, ld_kwargs, data_loader,
                  num_starting_points=100, num_gradient_steps=5000,
-                 lr=1e-3, num_saved_crys=10):
+                 lr=1e-3, num_saved_crys=10,
+                 megnet_loss_mode=False,
+                 coef_100more=1.0, coef_tolerance=1.0):
     if data_loader is not None:
         batch = next(iter(data_loader)).to(model.device)
         _, _, z = model.encode(batch)
@@ -202,6 +215,12 @@ def optimization(model, ld_kwargs, data_loader,
     print(f"[CDVAE OPTIMIZATION] Detected task: {data_root}")
     print(f"[CDVAE OPTIMIZATION] Optimization direction: {'maximize' if maximize else 'minimize'} (sign = {sign}) with learning rate: {lr}")
     print(f"[CDVAE OPTIMIZATION] num_starting_points:{num_starting_points}")
+    target_bg = getattr(ld_kwargs, 'target_bg', -1.)
+    print(f"[CDVAE OPTIMIZATION] target_bg: {target_bg}")
+    print(f"[CDVAE OPTIMIZATION] coef_100more: {coef_100more}")
+    print(f"[CDVAE OPTIMIZATION] coef_tolerance: {coef_tolerance}")
+    print(f"[CDVAE OPTIMIZATION] num_gradient_steps: {num_gradient_steps}")
+    print(f"[CDVAE OPTIMIZATION] MEGNET loss: {megnet_loss_mode}")
 
     opt = Adam([z], lr=lr)
     model.freeze()
@@ -215,7 +234,27 @@ def optimization(model, ld_kwargs, data_loader,
 
     for i in tqdm(range(num_gradient_steps)):
         opt.zero_grad()
-        loss = sign * model.fc_property(z).mean()  # 🔽 ここが切り替えポイント
+
+        preds = _raw_property_preds(model, z)   # shape = (N,4) or (N,1)
+        # 🔽 MEGNet モードなら、4つの出力を解釈して個別に損失構成
+        if megnet_loss_mode:
+            pred_gap, pred_eform, pred_100more, pred_tolerance = preds.T
+
+            # 🔽 標準引数 target_bg を args から取得（main() の args を optimization() に渡す必要あり）
+            target_bg = getattr(ld_kwargs, 'target_bg', -1.)  # ← 無指定なら None
+            if target_bg < 0.:
+                raise ValueError("target_bg must be specified for MEGNet mode")
+
+            loss = (
+                - coef_100more*pred_100more.mean()
+                - coef_tolerance*pred_tolerance.mean()
+                + pred_eform.mean()
+                + torch.clip(torch.abs(pred_gap - target_bg) - 0.04, min=0.0).mean()
+            )
+        else:
+            # 通常モード（superconなど）
+            loss = sign * preds.mean()         # supercon など従来通り
+
         loss.backward()
         opt.step()
 
@@ -269,8 +308,10 @@ def optimization(model, ld_kwargs, data_loader,
     # 🔽 推論結果を追加：z に対する予測値
     with torch.no_grad():
         # 元の z に対する予測値
-        preds = model.fc_property(z).detach().cpu()
-        result['prediction'] = preds.squeeze(1)
+        #preds = model.fc_property(z).detach().cpu()
+        #result['prediction'] = preds.squeeze(1)
+        preds = _raw_property_preds(model, z).detach().cpu()  # ← 修正
+        result['prediction'] = preds              # (N,4) or (N,1)
 
         # 全ての構造をまとめて1回でデコードする
         crystal_list = []
@@ -308,6 +349,26 @@ def optimization(model, ld_kwargs, data_loader,
 
         print(f"[DEBUG] crystal_list length (after regroup) = {len(crystal_list)}")
 
+        # 🔽🔽🔽 ここに追加 🔽🔽🔽
+        def _is_reasonable(lengths, angles):
+            return (lengths > 0).all() and (angles > 0).all() and (angles < 180).all()
+
+        valid_crystals = []
+        valid_parent_indices = []
+        for d, idx in zip(crystal_list, parent_indices):
+            if _is_reasonable(d['lengths'], d['angles']):
+                valid_crystals.append(d)
+                valid_parent_indices.append(idx)
+            else:
+                print("🚫 skip unrealistic lattice:", d['lengths'], d['angles'])
+
+        if len(valid_crystals) == 0:
+            print("🛑 All sampled structures were filtered out.")
+            return result
+        crystal_list = valid_crystals
+        parent_indices = valid_parent_indices
+        # 🔼🔼🔼 ここまで追加 🔼🔼🔼
+
         dataset = TensorCrystDataset(
             crystal_list,
             niggli=model.hparams.data.niggli,
@@ -330,11 +391,14 @@ def optimization(model, ld_kwargs, data_loader,
         print(f"[DEBUG] batch size: {batch.num_graphs}")
         _, _, decoded_z = model.encode(batch)
 
-        preds_decoded = model.fc_property(decoded_z).detach().cpu()
-        result['prediction_decoded'] = preds_decoded.squeeze(1)
+        #preds_decoded = model.fc_property(decoded_z).detach().cpu()
+        #result['prediction_decoded'] = preds_decoded.squeeze(1)
+        preds_decoded = _raw_property_preds(model, decoded_z).detach().cpu()
+        result['prediction_decoded'] = preds_decoded
 
         # ★ prediction を同じ長さにそろえて格納
-        result['prediction_matched'] = preds[parent_indices].squeeze(1)
+        #result['prediction_matched'] = preds[parent_indices].squeeze(1)
+        result['prediction_matched'] = preds[parent_indices]
 
         # 例：誤差を確認
         diff = (result['prediction_matched'] - result['prediction_decoded']).abs()
@@ -352,7 +416,9 @@ def main(args):
                                 step_lr=args.step_lr,
                                 min_sigma=args.min_sigma,
                                 save_traj=args.save_traj,
-                                disable_bar=args.disable_bar)
+                                disable_bar=args.disable_bar,
+                                target_bg=args.target_bg, # 🔽 追加
+                                )
 
     if torch.cuda.is_available():
         model.to('cuda')
@@ -416,7 +482,13 @@ def main(args):
             loader = test_loader
         else:
             loader = None
-        optimized_crystals = optimization(model, ld_kwargs, loader,lr=args.lr,num_starting_points=args.num_starting_points, num_gradient_steps=args.num_gradient_steps,num_saved_crys=args.num_saved_crys)
+        optimized_crystals = optimization(
+            model, ld_kwargs, loader,lr=args.lr,num_starting_points=args.num_starting_points, 
+            num_gradient_steps=args.num_gradient_steps,num_saved_crys=args.num_saved_crys,
+            megnet_loss_mode=args.megnet_loss_mode,
+            coef_100more=args.coef_100more,         # ← 追加
+            coef_tolerance=args.coef_tolerance      # ← 追加
+        )
         optimized_crystals.update({'eval_setting': args,
                                    'time': time.time() - start_time})
 
@@ -450,6 +522,13 @@ if __name__ == '__main__':
     parser.add_argument('--num_gradient_steps', default=5000, type=int)
     parser.add_argument('--num_saved_crys', default=10, type=int)
     parser.add_argument('--label', default='')
+    parser.add_argument('--megnet_loss_mode', default=False, type=bool)
+    parser.add_argument('--target_bg', default=-1., type=float,
+                    help='Target bandgap value used in optimization loss (megnet mode)')
+    parser.add_argument('--coef_100more',  default=0.0, type=float,
+                        help='Loss coefficient for 100more (0 で無効)')
+    parser.add_argument('--coef_tolerance', default=0.0, type=float,
+                        help='Loss coefficient for tolerance (0 で無効)')
 
     args = parser.parse_args()
 
