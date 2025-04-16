@@ -5,7 +5,7 @@ lrs=(0.00001 0.0001 0.001 0.01)
 steps=(200 400 800 1600 3200 5000)
 
 # 実行コマンド
-# bash megnet_optimization_hpo.sh
+# bash sc_optimization_hpo.sh
 
 # 2重ループで条件を全探索
 for lr in "${lrs[@]}"; do

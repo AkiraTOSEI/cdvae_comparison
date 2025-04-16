@@ -485,6 +485,12 @@ def main(args):
             loader = test_loader
         else:
             loader = None
+        if args.label == '':
+            gen_out_name = f'eval_opt_bg{args.target_bg:.2f}.pt'
+        else:
+            gen_out_name = f'eval_opt_{args.label}__bg{args.target_bg:.2f}__lr{args.lr}__grad-steps{args.num_gradient_steps}.pt'
+        print(f"Output file: {gen_out_name}")
+        
         optimized_crystals = optimization(
             model, ld_kwargs, loader,lr=args.lr,num_starting_points=args.num_starting_points, 
             num_gradient_steps=args.num_gradient_steps,num_saved_crys=args.num_saved_crys,
@@ -496,10 +502,7 @@ def main(args):
         optimized_crystals.update({'eval_setting': args,
                                    'time': time.time() - start_time})
 
-        if args.label == '':
-            gen_out_name = f'eval_opt_bg{args.target_bg:.2f}.pt'
-        else:
-            gen_out_name = f'eval_opt_{args.label}__bg{args.target_bg:.2f}__lr{args.lr}__grad-steps{args.num_gradient_steps}.pt'
+
         torch.save(optimized_crystals, model_path / gen_out_name)
 
 
