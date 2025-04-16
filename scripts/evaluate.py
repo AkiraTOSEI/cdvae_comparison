@@ -210,7 +210,7 @@ def optimization(model, ld_kwargs, data_loader,
                  num_starting_points=100, num_gradient_steps=5000,
                  lr=1e-3, num_saved_crys=10,
                  megnet_loss_mode=False,
-                 coef_100more=1.0, coef_tolerance=1.0):
+                 coef_e_form=1.0 ,coef_100more=1.0, coef_tolerance=1.0):
     if data_loader is not None:
         batch = next(iter(data_loader)).to(model.device)
         _, _, z = model.encode(batch)
@@ -263,7 +263,7 @@ def optimization(model, ld_kwargs, data_loader,
             loss = (
                 - coef_100more*pred_100more.mean()
                 - coef_tolerance*pred_tolerance.mean()
-                + pred_eform.mean()
+                + coef_e_form*pred_eform.mean()
                 + torch.clip(torch.abs(pred_gap - target_bg) - 0.04, min=0.0).mean()
             )
         else:
@@ -489,6 +489,7 @@ def main(args):
             model, ld_kwargs, loader,lr=args.lr,num_starting_points=args.num_starting_points, 
             num_gradient_steps=args.num_gradient_steps,num_saved_crys=args.num_saved_crys,
             megnet_loss_mode=args.megnet_loss_mode,
+            coef_e_form=args.coef_e_form,           # ← 追加
             coef_100more=args.coef_100more,         # ← 追加
             coef_tolerance=args.coef_tolerance      # ← 追加
         )
@@ -528,6 +529,8 @@ if __name__ == '__main__':
     parser.add_argument('--megnet_loss_mode', default=False, type=bool)
     parser.add_argument('--target_bg', default=-1., type=float,
                     help='Target bandgap value used in optimization loss (megnet mode)')
+    parser.add_argument('--coef_e_form',  default=1.0, type=float,
+                        help='Loss coefficient for e_form (0 で無効)')
     parser.add_argument('--coef_100more',  default=0.0, type=float,
                         help='Loss coefficient for 100more (0 で無効)')
     parser.add_argument('--coef_tolerance', default=0.0, type=float,
