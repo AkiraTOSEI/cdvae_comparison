@@ -175,20 +175,35 @@ def generation(model, ld_kwargs, num_batches_to_sample, num_samples_per_z,
 
 
 ######################## 変更後のイメージ ########################
-def _sample_one(model, ld_kwargs, z_i, retry=3):
-    """GemNet が落ちる結晶をスキップして再試行"""
-    for _ in range(retry):
-        try:
-            out = model.langevin_dynamics(z_i, ld_kwargs)
-            return {k: (v.detach().cpu() if torch.is_tensor(v) else v)
-                    for k, v in out.items()}
-        except RuntimeError as e:
-            if "input.numel() == 0" in str(e):
-                # triplet が 0 件 → 新しい乱数でサンプリングし直す
-                z_i = torch.randn_like(z_i)
-                continue
-            raise
-    raise RuntimeError("GemNet failed after retrying")
+def _sample_batch(model, ld_kwargs, z_batch, max_chunk=32):
+    """
+    z_batch: [B, latent_dim]
+    戻り値: dict 各キーごとに B 個連結
+    """
+    try:
+        out = model.langevin_dynamics(z_batch, ld_kwargs)
+        return {k: (v.detach().cpu() if torch.is_tensor(v) else v)
+                for k, v in out.items()}
+
+    except RuntimeError as e:
+        # triplet 0 件 or block_inc エラーが出たら再帰的に分割
+        err = str(e)
+        need_split = any(s in err for s in
+                         ["block_inc contains", "input.numel() == 0"])
+        if not need_split or z_batch.shape[0] == 1:
+            raise          # 1 個でも落ちるなら諦める
+
+        # ---- サブバッチに分割して再試行 ----
+        mid = z_batch.shape[0] // 2
+        left  = _sample_batch(model, ld_kwargs, z_batch[:mid])
+        right = _sample_batch(model, ld_kwargs, z_batch[mid:])
+        merged = {}
+        for k in left:
+            if torch.is_tensor(left[k]):
+                merged[k] = torch.cat([left[k], right[k]], dim=0)
+            else:
+                merged[k] = left[k] + right[k]
+        return merged
 #################################################################
 
 def optimization(model, ld_kwargs, data_loader,
@@ -265,23 +280,11 @@ def optimization(model, ld_kwargs, data_loader,
         # ─────────────────────────────────────────────
         # ★ 1 結晶ずつ langevin_dynamics を回す ★
         # ─────────────────────────────────────────────
-        if (save_last_only and i == num_gradient_steps - 1) or \
-           (not save_last_only and (i % interval == 0 or i == num_gradient_steps - 1)):
+        if (save_last_only and i == num_gradient_steps - 1) or (not save_last_only and (i % interval == 0 or i == num_gradient_steps - 1)):
+                print(f"Current step:{i}.  sampling z_batch size = {z.shape[0]}")
+                merged = _sample_batch(model, ld_kwargs, z)      # ← ここだけで OK
+                all_crystals.append(merged)
 
-            print(f'Current step:{i}.  sampling each z separately...')
-            crystal_dicts = []
-            for j in range(z.shape[0]):          # = num_starting_points
-                out = _sample_one(model, ld_kwargs, z[j:j+1])
-                crystal_dicts.append(out)
-
-            # keys: frac_coords, atom_types, num_atoms, lengths, angles
-            merged = {}
-            for k in crystal_dicts[0]:
-                if torch.is_tensor(crystal_dicts[0][k]):
-                    merged[k] = torch.cat([d[k] for d in crystal_dicts], dim=0)
-                else:
-                    merged[k] = [d[k] for d in crystal_dicts]    
-            all_crystals.append(merged)
     #return {k: torch.cat([d[k] for d in all_crystals]).unsqueeze(0) for k in
     #        ['frac_coords', 'atom_types', 'num_atoms', 'lengths', 'angles']}
     #result = {
@@ -493,9 +496,9 @@ def main(args):
                                    'time': time.time() - start_time})
 
         if args.label == '':
-            gen_out_name = 'eval_opt.pt'
+            gen_out_name = f'eval_opt_bg{args.target_bg:.2f}.pt'
         else:
-            gen_out_name = f'eval_opt_{args.label}.pt'
+            gen_out_name = f'eval_opt_{args.label}__bg{args.target_bg:.2f}__lr{args.lr}__grad-steps{args.num_gradient_steps}.pt'
         torch.save(optimized_crystals, model_path / gen_out_name)
 
 
