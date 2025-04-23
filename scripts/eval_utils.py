@@ -92,7 +92,7 @@ def load_model(model_path, load_data=False, testing=True):
                 test_loader = datamodule.test_dataloader()[0]
             else:
                 datamodule.setup()
-                test_loader = datamodule.val_dataloader()[0]
+                test_loader = datamodule.val_dataloader()
         else:
             test_loader = None
 
