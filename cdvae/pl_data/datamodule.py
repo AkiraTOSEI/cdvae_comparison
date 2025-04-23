@@ -76,9 +76,10 @@ class CrystDataModule(pl.LightningDataModule):
                 print(f"[DEBUG] Using special scaler; dataset.prop: {train_dataset.prop}", flush=True)
                 scaler = []
                 for p in train_dataset.prop:
-                    if p in ['100more', 'tolerance']:
+                    if p in ['gap','100more', 'tolerance']:
                         # これらのプロパティは IdentityScaler を使用する
                         scaler.append(IdentityScaler())
+                        print(f'Scaler for {p}. I use Identity scaler')
                     else:
                         scaler.append(get_scaler_from_data_list(train_dataset.cached_data, key=p))
                 self.scaler = scaler
