@@ -55,7 +55,7 @@ class CrystDataset(Dataset):
 
     def __getitem__(self, index):
         data_dict = self.cached_data[index]
-
+        print(f"[DEBUG] data_dict: {data_dict.keys()}")
         # scaler is set in DataModule set stage
         if self.task == "megnet":
             # 各カラムに対応するスケーラーで変換
